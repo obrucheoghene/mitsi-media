@@ -886,6 +886,38 @@ class SignalNode extends EventEmitter {
       console.log('ResumeConsumer', args);
     },
 
+    [Actions.SetConsumerPreferredLayers]: async args => {
+      try {
+        const data = ValidationSchema.setConsumerPreferredLayers.parse(args);
+        const { roomId, peerId, consumerId, spatialLayer, temporalLayer } =
+          data;
+
+        const room = Room.getRoom(roomId);
+        const peer = room?.getPeer(peerId);
+
+        if (!room || !peer) {
+          throw 'Failed to set consumer preferred layers: Peer/room not found';
+        }
+
+        const consumer = peer.getConsumer(consumerId);
+        if (!consumer) {
+          throw 'Consumer not found';
+        }
+
+        // Set preferred layers on the consumer
+        await consumer.setPreferredLayers({
+          spatialLayer,
+          temporalLayer: temporalLayer ?? spatialLayer,
+        });
+
+        console.log(
+          `Set consumer preferred layers: ${consumerId}, spatial: ${spatialLayer}, temporal: ${temporalLayer ?? spatialLayer}`
+        );
+      } catch (error) {
+        console.error('SetConsumerPreferredLayers error:', error);
+      }
+    },
+
     [Actions.RestartIce]: async (args, requestId) => {
       try {
         if (!requestId) throw 'Require request id';
