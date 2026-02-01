@@ -703,10 +703,27 @@ class SignalNode extends EventEmitter {
           throw 'Failed to create webrtc transport: Peer/room not found';
         const existingPeers = room.getPeers();
 
-        // create consumer from producers of existing peers
-        existingPeers.forEach(existingPeer => {
-          // ingore the peer that requested this
-          if (existingPeer.id === peerId) return;
+        // Selective consumer creation to avoid O(n²) explosion
+        // Only create consumers for:
+        // 1. First N peers (viewport/pagination limit)
+        // 2. Active speakers (TODO: implement active speaker detection)
+        // 3. Pinned/featured peers (TODO: implement when UI supports it)
+
+        const maxInitialConsumers = parseInt(
+          process.env.MAX_INITIAL_CONSUMERS || '25'
+        );
+
+        // Filter out the requesting peer and limit to maxInitialConsumers
+        const peersToConsume = existingPeers
+          .filter(existingPeer => existingPeer.id !== peerId)
+          .slice(0, maxInitialConsumers);
+
+        console.info(
+          `Creating consumers for ${peersToConsume.length}/${existingPeers.length - 1} peers (selective subscription)`
+        );
+
+        // create consumer from producers of selected peers
+        peersToConsume.forEach(existingPeer => {
           const peerProducers = existingPeer.getProducers();
           peerProducers.forEach(producer => {
             this.createConsumer({
