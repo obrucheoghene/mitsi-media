@@ -92,7 +92,28 @@ class SignalNode extends EventEmitter {
     }
   }
 
-  private setupHeartbeat(): void {}
+  private setupHeartbeat(): void {
+    this.lastHeartbeat = Date.now();
+    this.heartbeatInterval = setInterval(() => {
+      const staleness = Date.now() - this.lastHeartbeat;
+      if (staleness > this.heartbeatTimeout) {
+        console.warn(
+          `SignalNode ${this.id} heartbeat timeout (${staleness}ms) — disconnecting`
+        );
+        this.handleClientDisconnection('heartbeat_timeout');
+        return;
+      }
+      try {
+        this.sendMessage(Actions.Heartbeat, {
+          timestamp: Date.now(),
+          nodeId: this.id,
+          connectionId: this.connectionId,
+        });
+      } catch (error) {
+        console.warn(`Failed to send heartbeat for ${this.id}:`, error);
+      }
+    }, 30000);
+  }
 
   private clearHeartbeat(): void {
     if (this.heartbeatInterval) {
@@ -169,18 +190,23 @@ class SignalNode extends EventEmitter {
         return;
       }
 
+      if (action === Actions.HeartbeatAck) {
+        this.lastHeartbeat = Date.now();
+        return;
+      }
+
       // Find and execute handler
       const handler = this.actionHandlers[action as Actions];
       if (handler) {
-        try {
-          handler(parsedArgs, requestId);
-        } catch (handlerError) {
-          console.error(
-            ` Error in handler for action ${action} from ${this.id}:`,
-            handlerError
-          );
-          this.handleError(handlerError as Error, 'handler_error');
-        }
+        Promise.resolve()
+          .then(() => handler(parsedArgs, requestId))
+          .catch((handlerError: Error) => {
+            console.error(
+              `Error in handler for action ${action} from ${this.id}:`,
+              handlerError
+            );
+            this.handleError(handlerError, 'handler_error');
+          });
       } else {
         console.warn(`⚠️  No handler for action ${action} from ${this.id}`);
         this.emit('unhandledMessage', {
@@ -290,6 +316,7 @@ class SignalNode extends EventEmitter {
     if (!this.call) {
       throw `Cannot send message to MediaNode ${this.id}: not connected`;
     }
+    const REQUEST_TIMEOUT_MS = 30000;
     const requestId = crypto.randomUUID();
     const message: MessageRequest = {
       action,
@@ -299,9 +326,26 @@ class SignalNode extends EventEmitter {
 
     return new Promise<ResponseData>((resolve, reject) => {
       if (this.call) {
+        const timeout = setTimeout(() => {
+          if (this.pendingRequests.has(requestId)) {
+            this.pendingRequests.delete(requestId);
+            reject(
+              new Error(
+                `Request timeout after ${REQUEST_TIMEOUT_MS}ms for action ${action}`
+              )
+            );
+          }
+        }, REQUEST_TIMEOUT_MS);
+
         this.pendingRequests.set(requestId, {
-          resolve,
-          reject,
+          resolve: data => {
+            clearTimeout(timeout);
+            resolve(data);
+          },
+          reject: err => {
+            clearTimeout(timeout);
+            reject(err);
+          },
         });
         this.call.write(message);
       }
@@ -566,7 +610,7 @@ class SignalNode extends EventEmitter {
     [key in Actions]?: (
       args: { [key: string]: unknown },
       requestId?: string
-    ) => void;
+    ) => void | Promise<void>;
   } = {
     [Actions.Connected]: args => {
       console.log(`Connection confirmed from ${this.id}:`, args);
