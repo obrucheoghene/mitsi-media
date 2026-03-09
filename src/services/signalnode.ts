@@ -788,15 +788,18 @@ class SignalNode extends EventEmitter {
         });
 
         // Pipe Producer From This Router to other routers
+        // Must await before creating consumers so cross-router canConsume() works
         const routersToPipeTo = room.getRoutersToPipeTo(peer.getRouter());
-        routersToPipeTo.forEach(router => {
-          peer
-            .pipeToRouter({
-              router,
-              producerId: producer.id,
-            })
-            .catch(error => console.log(error));
-        });
+        await Promise.all(
+          routersToPipeTo.map(router =>
+            peer
+              .pipeToRouter({
+                router,
+                producerId: producer.id,
+              })
+              .catch(error => console.log(error))
+          )
+        );
 
         // Create server-side consumer for each existing peers
         const existingPeers = room.getPeers();
